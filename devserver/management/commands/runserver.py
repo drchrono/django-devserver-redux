@@ -1,3 +1,4 @@
+from django import VERSION as DJANGO_VERSION
 from django.conf import settings
 from django.core.management.commands.runserver import Command as BaseCommand
 from django.core.management.base import CommandError, handle_default_options
@@ -42,26 +43,61 @@ def run(addr, port, wsgi_handler, mixin=None, ipv6=False):
     httpd.set_app(wsgi_handler)
     httpd.serve_forever()
 
+_command_args = [
+    (['--werkzeug'], {
+        'action': 'store_true',
+        'dest': 'use_werkzeug',
+        'default': False,
+        'help': 'Tells Django to use the Werkzeug interactive debugger.',
+    }),
+    (['--forked'], {
+        'action': 'store_true',
+        'dest': 'use_forked',
+        'default': False,
+        'help': 'Use forking instead of threading for multiple web requests.',
+    }),
+    (['--dozer'], {
+        'action': 'store_true',
+        'dest': 'use_dozer',
+        'default': False,
+        'help': 'Enable the Dozer memory debugging middleware.',
+    }),
+    (['--wsgi-app'], {
+        'dest': 'wsgi_app',
+        'default': None,
+        'help': 'Load the specified WSGI app as the server endpoint.',
+    }),
+]
+if any(app in settings.INSTALLED_APPS for app in STATICFILES_APPS):
+    _command_args.append((['--nostatic'], {
+        'dest': 'use_static_files',
+        'action': 'store_false',
+        'default': True,
+        'help': 'Tells Django to NOT automatically serve static files at STATIC_URL.',
+    }))
+
 
 class Command(BaseCommand):
-    option_list = BaseCommand.option_list + (
-        make_option(
-            '--werkzeug', action='store_true', dest='use_werkzeug', default=False,
-            help='Tells Django to use the Werkzeug interactive debugger.'),
-        make_option(
-            '--forked', action='store_true', dest='use_forked', default=False,
-            help='Use forking instead of threading for multiple web requests.'),
-        make_option(
-            '--dozer', action='store_true', dest='use_dozer', default=False,
-            help='Enable the Dozer memory debugging middleware.'),
-        make_option(
-            '--wsgi-app', dest='wsgi_app', default=None,
-            help='Load the specified WSGI app as the server endpoint.'),
-    )
-    if any(map(lambda app: app in settings.INSTALLED_APPS, STATICFILES_APPS)):
-        option_list += make_option(
-            '--nostatic', dest='use_static_files', action='store_false', default=True,
-            help='Tells Django to NOT automatically serve static files at STATIC_URL.'),
+    if DJANGO_VERSION > (1, 8, 0):
+        # Django 1.8 introduced the `add_arguments` method to build parameters
+        # for management commands instead of overriding the `option_list`
+        # attribute. The latter was removed in Django 1.10.
+        def add_arguments(self, parser):
+            for args, kwargs in _command_args:
+                parser.add_argument(*args, **kwargs)
+
+            # Some arguments aren't valid in older versions of Django:
+            parser.add_argument('addrport', default='8000')
+            parser.add_argument(
+                '-6', '--ipv6', dest='use_ipv6', action='store_true', default=False,
+                help='Uses IPv6 for the development server. This changes the default IP address from 127.0.0.1 to ::1.',
+            )
+            parser.add_argument(
+                '--noreload', dest='use_reloader', action='store_false', default=True,
+                help='Disables the auto-reloader.',
+            )
+    else:
+        option_list = BaseCommand.option_list + [make_option(*args, **kwargs) for (args, kwargs) in _command_args]
 
     help = "Starts a lightweight Web server for development which outputs additional debug information."
     args = '[optional port number, or ipaddr:port]'
@@ -72,23 +108,14 @@ class Command(BaseCommand):
         # `requires_system_checks`. If both options are present, an error is
         # raised. BaseCommand sets requires_system_checks in >= Django 1.7.
         if hasattr(self, 'requires_system_checks'):
-            requires_system_checks = False
+            self.requires_system_checks = False
         else:
-            requires_model_validation = False  # Django < 1.7
+            self.requires_model_validation = False  # Django < 1.7
         super(Command, self).__init__()
 
     def run_from_argv(self, argv):
-        parser = self.create_parser(argv[0], argv[1])
-        default_args = getattr(settings, 'DEVSERVER_ARGS', None)
-        if default_args:
-            options, args = parser.parse_args(default_args)
-        else:
-            options = None
-
-        options, args = parser.parse_args(argv[2:], options)
-
-        handle_default_options(options)
-        self.execute(*args, **options.__dict__)
+        new_argv = argv[:2] + getattr(settings, 'DEVSERVER_ARGS', []) + argv[2:]
+        return super(Command, self).run_from_argv(new_argv)
 
     def handle(self, addrport='', *args, **options):
         if args:
@@ -208,7 +235,7 @@ class Command(BaseCommand):
             if use_werkzeug:
                 run_simple(
                     self.addr, int(self.port), DebuggedApplication(app, True),
-                    use_reloader=True, use_debugger=True)
+                    use_reloader=options['use_reloader'], use_debugger=True)
             else:
                 run(self.addr, int(self.port), app, mixin, ipv6=self.use_ipv6)
 
