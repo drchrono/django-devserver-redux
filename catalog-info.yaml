@@ -1,0 +1,16 @@
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: django-devserver-redux
+  description: A drop-in replacement for Django's runserver.
+  annotations:
+    business-unit: EverHealth
+    github.com/project-slug: drchrono/django-devserver-redux
+    product: DRC
+spec:
+  type: service
+  lifecycle: production
+  owner: EverHealth
+  implementation:
+    languages:
+    - Python
